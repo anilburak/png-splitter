@@ -29,6 +29,8 @@ class PNGSplitterApp:
         self.line_mode = tk.StringVar(value="vertical")
         self.rows = tk.IntVar(value=1)
         self.cols = tk.IntVar(value=1)
+        self.remove_background = tk.BooleanVar(value=True)
+        self.background_tolerance = tk.IntVar(value=24)
         self.name_vars = []
         self.presets = {}
         self.preset_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "name_presets.json")
@@ -80,6 +82,14 @@ class PNGSplitterApp:
         col_spin.pack(side="left", padx=3)
         row_spin.bind("<KeyRelease>", lambda _e: self.update_name_table())
         col_spin.bind("<KeyRelease>", lambda _e: self.update_name_table())
+
+        background_frame = ttk.Frame(modes)
+        background_frame.grid(row=2, column=0, columnspan=4, sticky="w", pady=(7, 0))
+        ttk.Checkbutton(background_frame, text="Kenar arka planını şeffaf yap",
+                        variable=self.remove_background).pack(side="left")
+        ttk.Label(background_frame, text="Tolerans:").pack(side="left", padx=(12, 3))
+        ttk.Spinbox(background_frame, from_=0, to=100, width=5,
+                    textvariable=self.background_tolerance).pack(side="left")
 
         canvas_box = ttk.LabelFrame(left, text="Önizleme (çizgi eklemek için görsele tıklayın)", padding=4)
         canvas_box.pack(fill="both", expand=True)
@@ -296,12 +306,59 @@ class PNGSplitterApp:
             for r in range(rows):
                 for c in range(cols):
                     part = self.image.crop((xs[c], ys[r], xs[c + 1], ys[r + 1]))
+                    if self.remove_background.get():
+                        part = self._make_edge_background_transparent(part)
                     part.save(os.path.join(output, names[index]), format="PNG")
                     index += 1
             self.status.set(f"{index} adet PNG oluşturuldu — {output}")
             messagebox.showinfo("İşlem tamamlandı", f"{index} adet PNG oluşturuldu")
         except Exception as exc:
             messagebox.showerror("Kaydetme hatası", f"PNG dosyaları kaydedilirken hata oluştu:\n{exc}")
+
+    def _make_edge_background_transparent(self, image):
+        """Make background-colored pixels connected to an edge transparent."""
+        rgba = image.convert("RGBA")
+        pixels = rgba.load()
+        width, height = rgba.size
+        if not width or not height:
+            return rgba
+        try:
+            tolerance = max(0, min(100, int(self.background_tolerance.get())))
+        except (ValueError, tk.TclError):
+            tolerance = 24
+        corners = [pixels[0, 0][:3], pixels[width - 1, 0][:3],
+                   pixels[0, height - 1][:3], pixels[width - 1, height - 1][:3]]
+        background = max(set(corners), key=corners.count)
+        threshold = tolerance * tolerance * 3
+
+        def matches(x, y):
+            red, green, blue, alpha = pixels[x, y]
+            return alpha == 0 or ((red - background[0]) ** 2 +
+                                  (green - background[1]) ** 2 +
+                                  (blue - background[2]) ** 2 <= threshold)
+
+        stack = [(x, y) for x in range(width) for y in (0, height - 1)]
+        stack += [(x, y) for y in range(1, height - 1) for x in (0, width - 1)]
+        visited = bytearray(width * height)
+        while stack:
+            x, y = stack.pop()
+            offset = y * width + x
+            if visited[offset]:
+                continue
+            visited[offset] = 1
+            if not matches(x, y):
+                continue
+            red, green, blue, _alpha = pixels[x, y]
+            pixels[x, y] = (red, green, blue, 0)
+            if x:
+                stack.append((x - 1, y))
+            if x + 1 < width:
+                stack.append((x + 1, y))
+            if y:
+                stack.append((x, y - 1))
+            if y + 1 < height:
+                stack.append((x, y + 1))
+        return rgba
 
     def _load_presets_file(self):
         try:
