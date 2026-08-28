@@ -331,11 +331,33 @@ class PNGSplitterApp:
         background = max(set(corners), key=corners.count)
         threshold = tolerance * tolerance * 3
 
+        # Bazı üreticiler şeffaflık yerine gri-beyaz dama desenini doğrudan
+        # görsele basıyor. Kenarın çoğu açık ve nötrse iki tonu da aynı arka
+        # plan kabul et. Parlaklık alt sınırı koyu gri kıyafetleri korur.
+        step = max(1, min(width, height) // 200)
+        border = ([pixels[x, 0][:3] for x in range(0, width, step)] +
+                  [pixels[x, height - 1][:3] for x in range(0, width, step)] +
+                  [pixels[0, y][:3] for y in range(0, height, step)] +
+                  [pixels[width - 1, y][:3] for y in range(0, height, step)])
+        neutral_limit = max(12, tolerance)
+        neutral_border = [color for color in border
+                          if max(color) - min(color) <= neutral_limit and min(color) >= 160]
+        neutral_brightness = [sum(color) / 3 for color in neutral_border]
+        checkerboard = (len(neutral_border) >= len(border) * 0.65 and
+                        neutral_brightness and
+                        max(neutral_brightness) - min(neutral_brightness) >= 15)
+        checker_min_brightness = (min(neutral_brightness) - tolerance
+                                  if checkerboard else 256)
+
         def matches(x, y):
             red, green, blue, alpha = pixels[x, y]
-            return alpha == 0 or ((red - background[0]) ** 2 +
-                                  (green - background[1]) ** 2 +
-                                  (blue - background[2]) ** 2 <= threshold)
+            close_to_corner = ((red - background[0]) ** 2 +
+                               (green - background[1]) ** 2 +
+                               (blue - background[2]) ** 2 <= threshold)
+            light_neutral_checker = (checkerboard and
+                                     max(red, green, blue) - min(red, green, blue) <= neutral_limit and
+                                     (red + green + blue) / 3 >= checker_min_brightness)
+            return alpha == 0 or close_to_corner or light_neutral_checker
 
         stack = [(x, y) for x in range(width) for y in (0, height - 1)]
         stack += [(x, y) for y in range(1, height - 1) for x in (0, width - 1)]
@@ -392,7 +414,21 @@ class PNGSplitterApp:
         if not name or name not in self.presets:
             messagebox.showwarning("Preset seçilmedi", "Lütfen yüklenecek bir preset seçin.")
             return
-        self.update_name_table(self.presets[name])
+        names = self.presets[name]
+        rows, cols = self.get_dimensions()
+        if rows * cols != len(names) and names:
+            # Eski preset dosyası yalnız isim listesini saklıyor. Parça sayısı
+            # mevcut düzenle uyuşmuyorsa en dengeli grid'i otomatik kur; örneğin
+            # 24 isim 4x6, 20 isim 4x5 olarak açılır.
+            candidates = [(r, len(names) // r) for r in range(1, int(len(names) ** 0.5) + 1)
+                          if len(names) % r == 0]
+            rows, cols = min(candidates, key=lambda pair: abs(pair[1] - pair[0]))
+            self.cut_mode.set("grid")
+            self.rows.set(rows)
+            self.cols.set(cols)
+            self.mode_changed()
+        self.update_name_table(names)
+        self.status.set(f'"{name}" preset yüklendi: {len(names)} isim, {rows} × {cols} grid.')
 
 
 def main():
